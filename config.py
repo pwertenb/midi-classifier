@@ -1,5 +1,5 @@
-TEST_FILE = 'jazz-midi/IfIAintGotYou.mid'
-CHORDS_DIR = 'midi-chords'
+TRAIN_DIR = 'midi-chords'
+TEST_DIR = 'test'
 MAX_EPOCHS = 25000
 LR = 1e-4
 HIDDEN_LAYERS=(12,24,24,12,)
@@ -7,5 +7,4 @@ VERBOSE=True
 RANDOM_SEED=42
 EARLY_STOP=False
 TOL=1e-8
-NUM_NOTES=12
 ITER_NO_CHANGE=10

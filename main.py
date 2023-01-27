@@ -4,57 +4,26 @@ import config
 import numpy as np
 import matplotlib.pyplot as plt
 
-# get midi data
-def format_chord(tmp):
-    result = np.zeros((12,))
-    for i in tmp:
-        result[i] = 1
-    return result.astype(int)
-
-print("Importing files...")
-chords, longest = midi.import_chords(midi.get_files(config.CHORDS_DIR))
-
-# format midi data (extract just notes)
-print("Extracting notes from data...")
-draft = {}
-for i in chords:
-    tmp = np.array(chords[i][0])[:,0:1]
-    tmp = np.reshape(tmp, (len(tmp))) % 12
-    draft[i] = format_chord(tmp)
-
-# discovering duplicate chords
-def chord_to_tuple(chord):
-    return tuple(chord)
-
-print("discovering duplicate chords...")
-
-chord_notes = dict()
-tmp = []
-for key, val in draft.items():
-    tup = chord_to_tuple(val)
-    if tup not in tmp:
-        tmp.append(tup)
-        chord_notes[key] = tup
-answers = dict()
-for key, val in draft.items():
-    tup = chord_to_tuple(val)
-    if tup in answers:
-        answers[tup].append(key)
-    else:
-        answers[tup] = [key]
-    
-# set up model
 import os.path
 from sklearn.neural_network import MLPClassifier
 import pickle
 
 model_filename = 'model.pkl'
+chord_notes, answers = midi.get_base_data()
+
+#FIXME
+print([i for i in chord_notes.keys() if "A#" in i or "Bb" in i or "Ddim" in i])
+print([i for i in answers.items() if "Bb7" in i[1]])
+#exit()
+
+
 if not os.path.exists(model_filename):
     print("Creating and training model...")
-    y = np.array(list(chord_notes.keys()))
-    X = np.array([np.asarray(chord_notes[i]) for i in chord_notes])
+    train_X, train_y = midi.create_train_data()
+
     model = MLPClassifier(hidden_layer_sizes=config.HIDDEN_LAYERS, learning_rate_init=config.LR, max_iter=config.MAX_EPOCHS, random_state=config.RANDOM_SEED, tol=config.TOL, verbose=config.VERBOSE, early_stopping=config.EARLY_STOP, n_iter_no_change=config.ITER_NO_CHANGE)
-    model = model.fit(X, y)
+
+    model = model.fit(train_X, train_y)
     pickle.dump(model, open(model_filename, 'wb'))
     
 model = pickle.load(open(model_filename, 'rb'))
@@ -80,39 +49,34 @@ tmp = np.array([[11, 3, 6, 9],
                 [9, 1, 4, 7],
                 [11, 11, 4, 7],
                 [11, 11, 2, 6]], dtype=object)
-test_X = np.empty((0,config.NUM_NOTES))
+test_X = np.empty((0,12))
 for i in range(len(tmp)):
-    test_X = np.append(test_X, np.array([format_chord(tmp[i])]), axis=0)
+    test_X = np.append(test_X, np.array([midi.__format_chord__(tmp[i])]), axis=0)
+
+# FIXME
+test_X, test_y, chord_notes, answers = midi.create_test_data()
 
 # scoring system
-# if exact chord, give 1 point
-# if different chord but contains same notes, give 0.5 points
 def score_func(model, X, y):
     preds = model.predict(X)
     tally = 0
     for i in range(len(preds)):
-        if preds[i] != y[i]:
-            print('incorrect chord:')
-            print(X[i])
+        if y[i] not in answers[chord_notes[preds[i]]]:
+            print('incorrect chord:', X[i])
             print(y[i], '(actual) vs', preds[i], '(predicted)')
-            print(chord_notes[y[i]])
-            print(chord_notes[preds[i]])
+            print(chord_notes[y[i]], chord_notes[preds[i]])
+            print()
             
             y_notes = np.where(np.array(chord_notes[y[i]]) == 1)[0]
             pred_notes = np.where(np.array(chord_notes[preds[i]]) == 1)[0]
-            intersect = np.intersect1d(y_notes, pred_notes, assume_unique=True)
             diff = np.setxor1d(y_notes, pred_notes, assume_unique=True)
-            print('Adding', len(intersect), '/', len(intersect) + len(diff) - 1, '=', len(intersect) / (len(intersect) + len(diff) - 1), 'points')
-            tally += len(intersect) / (len(intersect) + len(diff) - 1)   
 
-    for i in range(len(preds)): 
-        pred_bools = np.greater(np.array(chord_notes[preds[i]]), np.zeros(len(chord_notes[preds[i]])))
-        for j in answers.values():
-            j_bools = np.greater(np.array(chord_notes[j[0]]), np.zeros(len(chord_notes[j[0]])))
-            if preds[i] in j and y[i] in j:
-                print(preds[i], ': 1 point')
-                tally += 1
-                break
+            score = (12.0 - len(diff)) / 12.0
+            print('Adding', 12 - len(diff), '/ 12 =', score, 'points')
+            tally += score
+        else:
+            tally += 1
+
     print('Total:', tally, '/', len(X), 'points')
     return tally / len(X)
     
