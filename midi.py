@@ -47,12 +47,12 @@ def __import_chords__(names):
     draft = __extract_notes__(chord_dict)
     return draft
 
-def get_base_data(allow_dups=True):
-    draft = __import_chords__(__get_files__(config.TRAIN_DIR))
+def get_base_data(allow_dups=True, train_data=True):
+    draft = __import_chords__(__get_files__(config.TRAIN_DIR if train_data else config.TEST_DIR))
     return __create_answer_keys__(draft, allow_dups)
 
 def create_train_data():
-    chord_notes, answers = get_base_data(False)
+    chord_notes, answers = get_base_data(False, True)
 
     y = np.array(list(chord_notes.keys()))
     X = np.array([np.asarray(chord_notes[i]) for i in chord_notes])
@@ -60,10 +60,13 @@ def create_train_data():
     return X, y
 
 def create_test_data():
-    chord_notes, answers = get_base_data()
+    chord_notes, answers = get_base_data(True, False)
 
     y = np.array(list(chord_notes.keys()))
     X = np.array([np.asarray(chord_notes[i]) for i in chord_notes])
+
+    # get raw answers from training data
+    chord_notes, answers = get_base_data(True, True)
 
     return X, y, chord_notes, answers
 
