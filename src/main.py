@@ -9,10 +9,16 @@ import torch.autograd as autograd
 
 import os
 import numpy as np
+from tqdm import tqdm
+import matplotlib.pyplot as plt
+
+# set random seed
+torch.manual_seed(config.RANDOM_SEED)
 
 # train loop
 def train_loop(dataloader, model, loss_fn, optimizer):
     size = len(dataloader.dataset)
+    cum_loss = 0
     for batch, (X, y) in enumerate(dataloader):
         # Compute prediction and loss      
         pred = model(X)
@@ -22,9 +28,13 @@ def train_loop(dataloader, model, loss_fn, optimizer):
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
+        
+        cum_loss += loss.item()
+        
+    return cum_loss / len(dataloader)
 
 # test loop
-def test_loop(dataloader, model, loss_fn, epoch):
+def test_loop(dataloader, model, loss_fn):
     size = len(dataloader.dataset)
     num_batches = len(dataloader)
     test_loss, correct = 0, 0
@@ -37,8 +47,9 @@ def test_loop(dataloader, model, loss_fn, epoch):
 
     test_loss /= num_batches
     correct /= size
-    print(f"Epoch {epoch:4d}: Avg loss: {test_loss:8f} Accuracy: {(100*correct):5f}%")
-
+    return test_loss, correct
+    
+# loss function for chord prediction scoring
 class MidiLossFn(torch.autograd.Function):
     @staticmethod
     def forward(ctx, inputs, targets, orig_y, answers, chord_notes):
@@ -48,14 +59,15 @@ class MidiLossFn(torch.autograd.Function):
         ctx.orig_y = orig_y
         ctx.answers = answers
         ctx.chord_notes = chord_notes
+        
         for i in range(len(inputs)):
             pred_chord = orig_y[torch.argmax(inputs[i])]
             target_chord = orig_y[torch.argmax(targets[i])]  
-            
             if target_chord not in answers[chord_notes[pred_chord]]:
                 tally += 0
             else:
                 tally += 1
+                
         result = torch.FloatTensor([1 - (tally / len(inputs[0]))])
         result.requires_grad_()
         return result
@@ -64,6 +76,7 @@ class MidiLossFn(torch.autograd.Function):
     def backward(ctx, grad_output):
         return ctx.inputs - ctx.targets, None, None, None, None
 
+# wrapper for MidiLossFn
 class MidiLoss(nn.Module):
     def __init__(self, orig_y):
         super(MidiLoss, self).__init__()
@@ -73,6 +86,7 @@ class MidiLoss(nn.Module):
     def forward(self, inputs, targets):
         return MidiLossFn.apply(inputs, targets, self.orig_y, self.answers, self.chord_notes)
 
+# model
 class NeuralNetwork(nn.Module):
     def __init__(self, trained_data):
         super(NeuralNetwork, self).__init__()
@@ -90,6 +104,10 @@ class NeuralNetwork(nn.Module):
         self.answers = trained_data.answers
         self.orig_y = trained_data.orig_y
         
+        self.train_losses = []
+        self.test_losses = []
+        self.test_accuracies = []
+        
 
     def forward(self, x):
         x = self.flatten(x)
@@ -100,6 +118,7 @@ class NeuralNetwork(nn.Module):
     def to_chord(self, y):
         return self.orig_y[torch.argmax(y)]
 
+# dataset containing MIDI chords
 class MidiDataset(Dataset):
     def __init__(self, train=True):
         self.train = train
@@ -122,41 +141,75 @@ class MidiDataset(Dataset):
     def __getitem__(self, idx):
         return torch.flatten(self.X[idx]), torch.flatten(self.y[idx])
        
+# create graph with training results
+def graph_results(train_losses, test_losses, test_accuracies):
+    x = np.delete(np.linspace(0, len(train_losses), num=len(train_losses)+1, dtype=int), 0, 0)
 
-train_data = MidiDataset(train=True)
-test_data = MidiDataset(train=False)
-train_dataloader = DataLoader(train_data, shuffle=True)
-test_dataloader = DataLoader(train_data, shuffle=True)
-model = NeuralNetwork(train_data)
-optimizer = torch.optim.SGD(model.parameters(), lr=config.LR)
-loss_fn = MidiLoss(train_data.orig_y)
+    fig, axs = plt.subplots(1, 2, figsize=(9,4.5))
+    axs[0].set(xlabel='Epoch', ylabel='Loss', title='Training Loss')
+    axs[0].plot(x, train_losses, color='tab:blue')
 
-if not os.path.exists(config.MODEL_FILENAME):
-    print('Creating and training model...')
+    axs[1].set(xlabel='Epoch', title='Test Loss and Accuracy')
+    axs[1].plot(x, test_losses, color='tab:blue')
+    axs[1].tick_params(axis='y', labelcolor='tab:blue')
+    axs[1].set_ylabel('Loss', color='tab:blue')
 
-    for t in range(config.MAX_EPOCHS):
-        #print(f"Epoch {t+1}")
-        train_loop(train_dataloader, model, loss_fn, optimizer)
-        test_loop(test_dataloader, model, loss_fn, t+1)
-    
-    print("Saving model...")    
-    torch.save(model, config.MODEL_FILENAME)
-    
-model = torch.load(config.MODEL_FILENAME)
-    
-eval_dataloader = train_dataloader
-with torch.no_grad():
-    tally = 0
-    for X, y in eval_dataloader:      
-        pred = model(X)
-        pred_chord = model.to_chord(pred)
-        target_chord = model.to_chord(y)   
-        if pred_chord in model.answers[model.chord_notes[target_chord]]:
-            tally += 1
-        else:
-            print('pred:',pred_chord,'targ:',target_chord)
+    accuracy_axs = axs[1].twinx()
+    accuracy_axs.set_ylabel('Accuracy', color='tab:orange')
+    accuracy_axs.plot(x, test_accuracies, color='tab:orange')
+    accuracy_axs.tick_params(axis='y', labelcolor='tab:orange')
+
+    fig.tight_layout()
+    plt.savefig('graphs/results.png')
+    plt.close()
+
+# main code
+if __name__ == "__main__":
+    # set up data
+    train_data = MidiDataset(train=True)
+    test_data = MidiDataset(train=False)
+    train_dataloader = DataLoader(train_data, shuffle=True)
+    test_dataloader = DataLoader(test_data, shuffle=True)
+    model = NeuralNetwork(train_data)
+    optimizer = torch.optim.SGD(model.parameters(), lr=config.LR)
+    loss_fn = MidiLoss(train_data.orig_y)
+
+    # train model if not already found
+    if not os.path.exists(config.MODEL_FILENAME):
+        print('Creating and training model...')
+        pbar = tqdm(range(config.MAX_EPOCHS))
+
+        # training loop
+        for t in pbar:
+            loss = train_loop(train_dataloader, model, loss_fn, optimizer)
+            model.train_losses.append(loss)
             
-    print('accuracy:', tally / len(eval_dataloader.dataset))
+            loss, acc = test_loop(train_dataloader, model, loss_fn)
+            model.test_losses.append(loss)
+            model.test_accuracies.append(acc)
+            
+            pbar.set_description(f"Epoch {t+1:4d}: Train loss: {model.train_losses[-1]:4f} Test loss: {model.test_losses[-1]:4f} Accuracy: {model.test_accuracies[-1]*100:4f}%")
+            
+            graph_results(model.train_losses, model.test_losses, model.test_accuracies)
+            torch.save(model, config.MODEL_FILENAME)
+            
+        print("Saving model...")    
+        torch.save(model, config.MODEL_FILENAME)
+        
+    # test model
+    model = torch.load(config.MODEL_FILENAME) 
+    eval_dataloader = train_dataloader
+    with torch.no_grad():
+        tally = 0
+        for X, y in eval_dataloader:      
+            pred = model(X)
+            pred_chord = model.to_chord(pred)
+            target_chord = model.to_chord(y)   
+            if pred_chord in model.answers[model.chord_notes[target_chord]]:
+                tally += 1
+            else:
+                print('pred:',pred_chord,'targ:',target_chord)
+                
+        print('accuracy:', tally / len(eval_dataloader.dataset))
 
-print("Done.")
-
+    print("Done.")
